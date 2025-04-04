@@ -1,7 +1,7 @@
 // src/controllers/imageController.ts
 import { Response, NextFunction } from "express";
 import * as imageService from "../services/imageService";
-import { RequestWithImageData } from "../types/express.d"; // Import the custom type
+import { RequestWithImageData } from "../types/express.d";
 
 export const generateImage = async (
 	req: RequestWithImageData,
