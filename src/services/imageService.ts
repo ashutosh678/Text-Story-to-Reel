@@ -35,7 +35,8 @@ interface SaveResult {
 }
 
 export const saveImageToFile = async (
-	imageBase64Data: string
+	imageBase64Data: string,
+	baseFilename?: string // Add optional base filename
 ): Promise<SaveResult> => {
 	// Ensure the directory exists, awaiting the promise
 	await ensureOutputDir();
@@ -46,8 +47,17 @@ export const saveImageToFile = async (
 
 	try {
 		const imageBuffer: Buffer = Buffer.from(imageBase64Data, "base64");
-		const filename: string = `${uuidv4()}.png`; // Generate unique filename (assuming PNG)
+		// Use baseFilename if provided, otherwise use UUID
+		const filename: string = baseFilename
+			? `${baseFilename}.png`
+			: `${uuidv4()}.png`;
 		const filePath: string = path.join(OUTPUT_DIR, filename);
+
+		// Check if file already exists (optional, prevents overwrite)
+		// try {
+		//     await fs.access(filePath);
+		//     console.warn(`File ${filename} already exists. Overwriting.`);
+		// } catch {}
 
 		await fs.writeFile(filePath, imageBuffer);
 		console.log(`Image saved successfully to: ${filePath}`);

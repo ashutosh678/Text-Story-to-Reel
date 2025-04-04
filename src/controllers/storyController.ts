@@ -6,6 +6,7 @@ import {
 	generateImage,
 } from "../services/generationService";
 import * as imageService from "../services/imageService"; // For saving images
+import { compileImagesToVideo } from "../services/videoService"; // Import the video service
 
 export const generateImagesFromStory = async (
 	req: Request<{}, {}, StoryRequestBody>,
@@ -25,46 +26,83 @@ export const generateImagesFromStory = async (
 	try {
 		console.log("Processing story to generate images...");
 
-		// 1. Split story into scenes
 		const scenes = await splitStoryIntoScenes(story, apiKey);
 
 		const results: {
-			scene: string;
+			sceneIndex: number;
+			sceneText: string;
 			filename: string | null;
 			error?: string;
 		}[] = [];
+		const successfulImageFilenames: string[] = [];
 
+		let sceneIndex = 0;
 		for (const scene of scenes) {
-			console.log(`Processing scene: "${scene.substring(0, 50)}..."`);
+			sceneIndex++;
+			const baseFilename = `scene_${sceneIndex}`;
+			console.log(
+				`Processing scene ${sceneIndex}: "${scene.substring(0, 50)}..."`
+			);
 			let filename: string | null = null;
 			let errorMsg: string | undefined = undefined;
 
 			try {
-				// 3. Refine scene description into a prompt
 				const refinedPrompt = await refinePromptForImage(scene, apiKey);
-
-				// 4. Generate image for the refined prompt
 				const imageBase64 = await generateImage(refinedPrompt, apiKey);
-
-				// 5. Save the image
-				const savedImage = await imageService.saveImageToFile(imageBase64);
+				const savedImage = await imageService.saveImageToFile(
+					imageBase64,
+					baseFilename
+				);
 				filename = savedImage.filename;
-				console.log(`Image saved for scene: ${filename}`);
+				successfulImageFilenames.push(filename);
+				console.log(`Image saved for scene ${sceneIndex}: ${filename}`);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				console.error(
-					`Failed to process scene "${scene.substring(0, 50)}...": ${message}`
+					`Failed to process scene ${sceneIndex} "${scene.substring(
+						0,
+						50
+					)}...": ${message}`
 				);
 				errorMsg = message;
 			}
 
-			results.push({ scene, filename, error: errorMsg });
+			results.push({ sceneIndex, sceneText: scene, filename, error: errorMsg });
 		}
 
 		console.log("Finished processing all scenes.");
+
+		let videoResult: { videoFilename: string } | null = null;
+		let videoError: string | undefined = undefined;
+
+		if (successfulImageFilenames.length > 0) {
+			try {
+				console.log(
+					`Compiling video from ${successfulImageFilenames.length} images...`
+				);
+				const videoBaseName = `story_video_${Date.now()}`;
+				const compilationResult = await compileImagesToVideo({
+					imageFilenames: successfulImageFilenames,
+					frameRate: 1,
+					videoFilename: videoBaseName,
+				});
+				videoResult = { videoFilename: compilationResult.videoFilename };
+				console.log(
+					`Video compilation successful: ${videoResult.videoFilename}`
+				);
+			} catch (compileErr) {
+				const message =
+					compileErr instanceof Error ? compileErr.message : String(compileErr);
+				console.error(`Video compilation failed: ${message}`);
+				videoError = message;
+			}
+		}
+
 		res.status(200).json({
 			message: "Story processing complete.",
-			results,
+			sceneResults: results,
+			videoResult: videoResult,
+			videoError: videoError,
 		});
 	} catch (error) {
 		console.error("Error in story-to-images controller:", error);
