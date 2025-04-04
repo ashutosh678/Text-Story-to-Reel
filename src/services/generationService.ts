@@ -1,29 +1,24 @@
-import { Request, Response, NextFunction } from "express";
 import {
 	GoogleGenerativeAI,
 	GenerateContentCandidate,
 	Part,
 	GenerateContentResponse,
-	GoogleGenerativeAI as GoogleGenAIClient,
 } from "@google/generative-ai";
-import { RequestWithImageData } from "../types/express.d";
 import { getRefinementPrompt } from "../prompts/imagePrompts";
-import {
-	refinePromptForImage,
-	generateImage,
-} from "../services/generationService";
 
-async function _refinePrompt(
+// --- Service Function: Refine Prompt ---
+export async function refinePromptForImage(
 	initialPrompt: string,
-	genAI: GoogleGenAIClient
+	apiKey: string
 ): Promise<string> {
+	if (!apiKey) throw new Error("API key is required for refining prompt.");
+
+	const genAI = new GoogleGenerativeAI(apiKey);
 	const textModelIdentifier = "gemini-1.5-flash";
 	const textModel = genAI.getGenerativeModel({ model: textModelIdentifier });
 	const refinementMetaPrompt = getRefinementPrompt(initialPrompt);
 
-	console.log(
-		`Sending initial prompt to ${textModelIdentifier} for refinement...`
-	);
+	console.log(`Sending prompt to ${textModelIdentifier} for refinement...`);
 	const textResult = await textModel.generateContent(refinementMetaPrompt);
 	const textResponse: GenerateContentResponse = textResult.response;
 
@@ -45,12 +40,20 @@ async function _refinePrompt(
 	return refinedPrompt;
 }
 
-async function _generateImageFromPrompt(
+// --- Service Function: Generate Image ---
+export async function generateImage(
 	refinedPrompt: string,
-	genAI: GoogleGenAIClient
+	apiKey: string
 ): Promise<string> {
+	if (!apiKey) throw new Error("API key is required for generating image.");
+
+	const genAI = new GoogleGenerativeAI(apiKey);
 	const imageModelIdentifier = "gemini-2.0-flash-exp-image-generation";
 	const imageModel = genAI.getGenerativeModel({ model: imageModelIdentifier });
+
+	console.log(
+		`Sending refined prompt to ${imageModelIdentifier} via generateContent: \"${refinedPrompt}\"...`
+	);
 
 	const imageGenResult = await imageModel.generateContent({
 		contents: [{ role: "user", parts: [{ text: refinedPrompt }] }],
@@ -95,41 +98,52 @@ async function _generateImageFromPrompt(
 	}
 }
 
-export const generateImageWithGemini = async (
-	req: RequestWithImageData,
-	res: Response,
-	next: NextFunction
-) => {
-	const initialPrompt: string =
-		typeof req.body.prompt === "string" ? req.body.prompt : "";
-	const apiKey: string | undefined = process.env.GOOGLE_API_KEY;
+// --- Service Function: Split Story into Scenes ---
+// Uses a text model to identify logical scene breaks in a story.
+export async function splitStoryIntoScenes(
+	story: string,
+	apiKey: string
+): Promise<string[]> {
+	if (!apiKey) throw new Error("API key is required for splitting story.");
 
-	if (!initialPrompt) {
-		console.error("Middleware Error: Initial prompt is required");
-		return next(new Error("Initial prompt is required"));
+	const genAI = new GoogleGenerativeAI(apiKey);
+	const textModelIdentifier = "gemini-1.5-flash"; // Or another capable text model
+	const textModel = genAI.getGenerativeModel({ model: textModelIdentifier });
+
+	// Prompt asking the model to split the story into visual scenes
+	const splittingPrompt = `Analyze the following story and split it into distinct visual scenes. Each scene should represent a moment or location that can be visualized as a single image. Output *only* the scenes, separated by a unique delimiter like "<SCENE_BREAK>". Do not add any commentary before or after the scenes.
+
+Story:
+---
+${story}
+---
+
+Scenes (separated by "<SCENE_BREAK>"):
+`;
+
+	console.log(`Sending story to ${textModelIdentifier} for scene splitting...`);
+	const result = await textModel.generateContent(splittingPrompt);
+	const response = result.response;
+	const combinedScenesText = response.text();
+
+	if (!combinedScenesText) {
+		console.error("Model did not return text for scene splitting.", response);
+		throw new Error("Failed to split story into scenes.");
 	}
-	if (!apiKey) {
-		console.error("Missing GOOGLE_API_KEY in .env");
-		return next(new Error("Server configuration error: API key missing"));
-	}
 
-	try {
-		const genAI = new GoogleGenerativeAI(apiKey);
+	// Split the result by the delimiter
+	const scenes = combinedScenesText
+		.split("<SCENE_BREAK>")
+		.map((scene) => scene.trim())
+		.filter((scene) => scene.length > 0);
 
-		const refinedPrompt = await refinePromptForImage(initialPrompt, apiKey);
-
-		const imageBase64Data = await generateImage(refinedPrompt, apiKey);
-
-		req.generatedImageBase64 = imageBase64Data;
-		console.log(
-			"Single image generated and attached, passing to controller..."
+	if (scenes.length === 0) {
+		console.warn(
+			"Scene splitting resulted in zero scenes. Returning the original story as one scene."
 		);
-		next();
-	} catch (error) {
-		console.error(
-			"Error in single image generation middleware:",
-			error instanceof Error ? error.message : String(error)
-		);
-		next(error);
+		return [story]; // Fallback to the whole story if splitting fails
 	}
-};
+
+	console.log(`Split story into ${scenes.length} scenes.`);
+	return scenes;
+}

@@ -4,3 +4,8 @@ import { Request } from "express";
 export interface RequestWithImageData extends Request {
 	generatedImageBase64?: string;
 }
+
+// Interface for the story request body
+export interface StoryRequestBody {
+	story?: string;
+}
