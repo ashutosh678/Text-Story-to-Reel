@@ -5,8 +5,23 @@ import {
 	refinePromptForImage,
 	generateImage,
 } from "../services/generationService";
+import { synthesizeSpeech } from "../services/audioService"; // Import audio service
+import { compileScenesToVideo } from "../services/videoService";
 import * as imageService from "../services/imageService"; // For saving images
-import { compileImagesToVideo } from "../services/videoService"; // Import the video service
+
+// Result structure for each scene
+interface SceneProcessingResult {
+	sceneIndex: number;
+	sceneText: string;
+	imageFilename: string | null;
+	audioFilename: string | null;
+	error?: string; // Combined error for image/audio generation for this scene
+}
+
+// Result structure for the video compilation
+interface VideoCompilationResult {
+	videoFilename: string;
+}
 
 export const generateImagesFromStory = async (
 	req: Request<{}, {}, StoryRequestBody>,
@@ -24,17 +39,14 @@ export const generateImagesFromStory = async (
 	}
 
 	try {
-		console.log("Processing story to generate images...");
+		console.log("Processing story to generate images and audio...");
 
 		const scenes = await splitStoryIntoScenes(story, apiKey);
 
-		const results: {
-			sceneIndex: number;
-			sceneText: string;
-			filename: string | null;
-			error?: string;
-		}[] = [];
-		const successfulImageFilenames: string[] = [];
+		const sceneResults: SceneProcessingResult[] = [];
+		// Collect data needed for video compilation
+		const videoSceneData: { imageFilename: string; audioFilename: string }[] =
+			[];
 
 		let sceneIndex = 0;
 		for (const scene of scenes) {
@@ -43,19 +55,41 @@ export const generateImagesFromStory = async (
 			console.log(
 				`Processing scene ${sceneIndex}: "${scene.substring(0, 50)}..."`
 			);
-			let filename: string | null = null;
+
+			let currentImageFilename: string | null = null;
+			let currentAudioFilename: string | null = null;
 			let errorMsg: string | undefined = undefined;
 
 			try {
+				// Generate Image
 				const refinedPrompt = await refinePromptForImage(scene, apiKey);
 				const imageBase64 = await generateImage(refinedPrompt, apiKey);
 				const savedImage = await imageService.saveImageToFile(
 					imageBase64,
 					baseFilename
 				);
-				filename = savedImage.filename;
-				successfulImageFilenames.push(filename);
-				console.log(`Image saved for scene ${sceneIndex}: ${filename}`);
+				currentImageFilename = savedImage.filename;
+				console.log(
+					`Image saved for scene ${sceneIndex}: ${currentImageFilename}`
+				);
+
+				// Generate Audio
+				const savedAudio = await synthesizeSpeech({
+					text: scene,
+					outputFilename: baseFilename,
+				});
+				currentAudioFilename = savedAudio.audioFilename;
+				console.log(
+					`Audio saved for scene ${sceneIndex}: ${currentAudioFilename}`
+				);
+
+				// If both succeeded, add to video data list
+				if (currentImageFilename && currentAudioFilename) {
+					videoSceneData.push({
+						imageFilename: currentImageFilename,
+						audioFilename: currentAudioFilename,
+					});
+				}
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				console.error(
@@ -64,27 +98,35 @@ export const generateImagesFromStory = async (
 						50
 					)}...": ${message}`
 				);
-				errorMsg = message;
+				// Record error only if we didn't already get an image/audio
+				if (!currentImageFilename && !currentAudioFilename) {
+					errorMsg = message;
+				}
 			}
 
-			results.push({ sceneIndex, sceneText: scene, filename, error: errorMsg });
+			sceneResults.push({
+				sceneIndex,
+				sceneText: scene,
+				imageFilename: currentImageFilename,
+				audioFilename: currentAudioFilename,
+				error: errorMsg,
+			});
 		}
 
-		console.log("Finished processing all scenes.");
+		console.log("Finished processing all scenes for images and audio.");
 
-		let videoResult: { videoFilename: string } | null = null;
+		let videoResult: VideoCompilationResult | null = null;
 		let videoError: string | undefined = undefined;
 
-		if (successfulImageFilenames.length > 0) {
+		// Attempt video compilation only if we have valid scene data
+		if (videoSceneData.length > 0) {
 			try {
-				console.log(
-					`Compiling video from ${successfulImageFilenames.length} images...`
-				);
+				console.log(`Compiling video from ${videoSceneData.length} scenes...`);
 				const videoBaseName = `story_video_${Date.now()}`;
-				const compilationResult = await compileImagesToVideo({
-					imageFilenames: successfulImageFilenames,
-					frameRate: 1,
-					videoFilename: videoBaseName,
+				const compilationResult = await compileScenesToVideo({
+					scenes: videoSceneData,
+					outputVideoFilename: videoBaseName,
+					// Add transitionDuration or outputFps here if needed
 				});
 				videoResult = { videoFilename: compilationResult.videoFilename };
 				console.log(
@@ -100,7 +142,7 @@ export const generateImagesFromStory = async (
 
 		res.status(200).json({
 			message: "Story processing complete.",
-			sceneResults: results,
+			sceneResults: sceneResults,
 			videoResult: videoResult,
 			videoError: videoError,
 		});
