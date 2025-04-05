@@ -147,3 +147,76 @@ Scenes (separated by "<SCENE_BREAK>"):
 	console.log(`Split story into ${scenes.length} scenes.`);
 	return scenes;
 }
+
+// --- Service Function: Generate N Visual Prompts from Story ---
+// Asks a text model to break a story into a specific number of visual prompts.
+export async function generateVisualPromptsFromStory(
+	story: string,
+	numberOfPrompts: number,
+	apiKey: string
+): Promise<string[]> {
+	if (!apiKey)
+		throw new Error("API key is required for generating visual prompts.");
+	if (numberOfPrompts <= 0)
+		throw new Error("Number of prompts must be greater than zero.");
+
+	const genAI = new GoogleGenerativeAI(apiKey);
+	const textModelIdentifier = "gemini-1.5-flash"; // Or another capable text model
+	const textModel = genAI.getGenerativeModel({
+		model: textModelIdentifier,
+	});
+
+	// Prompt asking the model to generate N distinct visual prompts
+	const generationPrompt = `Analyze the following story and generate exactly ${numberOfPrompts} distinct visual scene descriptions suitable for an image generation model. Each description should capture a key moment or visual element progression through the story. Output *only* the descriptions, separated by the delimiter "<PROMPT_BREAK>". Do not add any commentary, numbering, or introduction before or after the descriptions.
+
+Story:
+---
+${story}
+---
+
+${numberOfPrompts} Visual Scene Descriptions (separated by "<PROMPT_BREAK>"):
+`;
+
+	console.log(
+		`Sending story to ${textModelIdentifier} to generate ${numberOfPrompts} prompts...`
+	);
+	const result = await textModel.generateContent(generationPrompt);
+	const response = result.response;
+	let combinedPromptsText = "";
+	if (response?.candidates?.[0]?.content?.parts) {
+		for (const part of response.candidates[0].content.parts) {
+			if (part.text) {
+				combinedPromptsText += part.text;
+			}
+		}
+	}
+
+	if (!combinedPromptsText) {
+		console.error("Model did not return text for prompt generation.", response);
+		throw new Error("Failed to generate visual prompts from story.");
+	}
+
+	// Split the result by the delimiter
+	const prompts = combinedPromptsText
+		.split("<PROMPT_BREAK>")
+		.map((p) => p.trim())
+		.filter((p) => p.length > 0);
+
+	// Validate if we got roughly the number requested (can sometimes be imperfect)
+	if (prompts.length === 0) {
+		console.error(
+			"Prompt generation resulted in zero prompts.",
+			combinedPromptsText
+		);
+		throw new Error("Prompt generation failed.");
+	}
+	if (prompts.length !== numberOfPrompts) {
+		console.warn(
+			`Requested ${numberOfPrompts} prompts, but received ${prompts.length}. Proceeding with received prompts.`
+		);
+		// Optional: Could try to truncate/pad, but using what we got is simpler
+	}
+
+	console.log(`Generated ${prompts.length} visual prompts.`);
+	return prompts;
+}

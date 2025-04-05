@@ -21,12 +21,6 @@ export const generateImage = async (
 			);
 		}
 
-		console.log(
-			`Controller: Received prompt \"${
-				prompt || "N/A"
-			}\", attempting to save image.`
-		);
-
 		const { filename } = await imageService.saveImageToFile(imageBase64Data);
 
 		res.status(200).json({

@@ -20,10 +20,6 @@ async function _refinePrompt(
 	const textModelIdentifier = "gemini-1.5-flash";
 	const textModel = genAI.getGenerativeModel({ model: textModelIdentifier });
 	const refinementMetaPrompt = getRefinementPrompt(initialPrompt);
-
-	console.log(
-		`Sending initial prompt to ${textModelIdentifier} for refinement...`
-	);
 	const textResult = await textModel.generateContent(refinementMetaPrompt);
 	const textResponse: GenerateContentResponse = textResult.response;
 
